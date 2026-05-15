@@ -1,0 +1,53 @@
+{
+  "_comment": "Example .vibe-context.json for reference",
+  "project": "threeic-erp",
+  "project_path": "/home/workspace/new-erp",
+  "created_at": "2026-05-15T10:00:00+08:00",
+  "sessions": [
+    {
+      "session_id": "vibe_20260515_100000",
+      "task": "Implement GET /api/v1/customers with pagination",
+      "board": "threeic-erp",
+      "status": "done",
+      "attempt": 2,
+      "max_retries": 3,
+      "last_change": {
+        "attempt": 2,
+        "files_modified": [
+          "app/api/customers.py",
+          "app/models/customer.py"
+        ],
+        "dev_output": "Added paginated customer list endpoint",
+        "qa_failures": []
+      },
+      "history": [
+        {
+          "attempt": 1,
+          "dev_report": "Initial implementation of customer endpoint",
+          "files_modified": ["app/api/customers.py"],
+          "qa_result": "FAIL",
+          "qa_failures": [
+            {
+              "test": "GET /api/v1/customers",
+              "error": "404 - Route not registered in app/main.py"
+            }
+          ],
+          "timestamp": "2026-05-15T10:01:00+08:00"
+        },
+        {
+          "attempt": 2,
+          "dev_report": "Fixed route registration, added pagination query params",
+          "files_modified": [
+            "app/api/customers.py",
+            "app/main.py"
+          ],
+          "qa_result": "PASS",
+          "qa_failures": [],
+          "timestamp": "2026-05-15T10:03:00+08:00"
+        }
+      ],
+      "completed_at": "2026-05-15T10:03:30+08:00"
+    }
+  ],
+  "_template_version": "1.0"
+}

@@ -1,0 +1,194 @@
+#!/bin/bash
+# ---------------------------------------------------------------------------
+# Vibe Coding CLI Wrapper
+#
+# Usage:
+#   vibe "task description" --project /path/to/project
+#   vibe --task "Implement auth" --project /path --board threeic-erp
+#   vibe --status                    # Show current vibe session
+#   vibe --abort                     # Abort current session
+# ---------------------------------------------------------------------------
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$(dirname "$SCRIPT_DIR")"
+VIBE_LOOP="$SCRIPT_DIR/vibe_loop.py"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Defaults
+MAX_RETRIES=3
+BOARD="default"
+NOTIFY="--notify"
+PROJECT_PATH=""
+TASK=""
+
+# ---------------------------------------------------------------------------
+# Parse Arguments
+# ---------------------------------------------------------------------------
+
+show_help() {
+    cat << EOF
+${BLUE}Vibe Coding CLI${NC}
+
+${GREEN}Usage:${NC}
+  vibe "task description" [options]
+  vibe --status
+  vibe --abort
+  vibe --help
+
+${GREEN}Options:${NC}
+  -p, --project PATH    Project root path (required for tasks)
+  -b, --board NAME      Kanban board name (default: default)
+  -r, --retries N       Max fix attempts (default: 3)
+  --no-notify           Disable Telegram notifications
+  --status              Show current vibe session status
+  --abort               Abort current vibe session
+
+${GREEN}Examples:${NC}
+  vibe "Implement user auth endpoint" -p /home/workspace/new-erp
+  vibe "Fix dashboard stats API" -p /home/workspace/new-erp -b threeic-erp -r 5
+  vibe --status
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        --status|-s)
+            MODE="status"
+            shift
+            ;;
+        --abort|-a)
+            MODE="abort"
+            shift
+            ;;
+        --project|-p)
+            PROJECT_PATH="$2"
+            shift 2
+            ;;
+        --board|-b)
+            BOARD="$2"
+            shift 2
+            ;;
+        --retries|-r)
+            MAX_RETRIES="$2"
+            shift 2
+            ;;
+        --no-notify)
+            NOTIFY="--no-notify"
+            shift
+            ;;
+        -*)
+            echo -e "${RED}Unknown option: $1${NC}"
+            show_help
+            exit 1
+            ;;
+        *)
+            if [[ -z "$TASK" ]]; then
+                TASK="$1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+# ---------------------------------------------------------------------------
+# Status Mode
+# ---------------------------------------------------------------------------
+
+if [[ "$MODE" == "status" ]]; then
+    echo -e "${BLUE}=== Vibe Session Status ===${NC}"
+
+    # Check for active vibe contexts
+    for ctx in $(find /home/workspace -name ".vibe-context.json" 2>/dev/null); do
+        project=$(dirname "$ctx" | sed 's|/home/workspace/||')
+        echo -e "\n${GREEN}Project:${NC} $project"
+        echo -e "${GREEN}Context:${NC} $ctx"
+
+        last_attempt=$(python3 -c "import json; c=json.load(open('$ctx')); print(c.get('history',[{}])[-1].get('attempt','none'))" 2>/dev/null || echo "?")
+        last_result=$(python3 -c "import json; c=json.load(open('$ctx')); print(c.get('history',[{}])[-1].get('qa_result','none'))" 2>/dev/null || echo "?")
+
+        echo -e "${GREEN}Last Attempt:${NC} $last_attempt"
+        echo -e "${GREEN}Last Result:${NC} $last_result"
+    done
+
+    # Check kanban for in_progress vibe tasks
+    echo ""
+    if command -v sqlite3 &> /dev/null; then
+        sqlite3 /root/.hermes/kanban.db "SELECT id, title, status, updated_at FROM tasks WHERE labels LIKE '%vibe-coding%' AND status IN ('in_progress', 'pending') ORDER BY updated_at DESC LIMIT 5;" 2>/dev/null | while IFS='|' read -r id title status updated; do
+            echo -e "${YELLOW}Kanban Task:${NC} #$id | $title | $status | $updated"
+        done
+    fi
+
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Abort Mode
+# ---------------------------------------------------------------------------
+
+if [[ "$MODE" == "abort" ]]; then
+    echo -e "${YELLOW}Aborting vibe sessions...${NC}"
+
+    # Clear vibe contexts
+    for ctx in $(find /home/workspace -name ".vibe-context.json" 2>/dev/null); do
+        project=$(dirname "$ctx" | sed 's|/home/workspace/||')
+        rm -f "$ctx"
+        echo -e "${RED}Removed:${NC} $ctx ($project)"
+    done
+
+    # Update kanban tasks
+    if command -v sqlite3 &> /dev/null; then
+        sqlite3 /root/.hermes/kanban.db "UPDATE tasks SET status='blocked' WHERE labels LIKE '%vibe-coding%' AND status='in_progress';" 2>/dev/null
+        echo -e "${YELLOW}Kanban tasks marked blocked${NC}"
+    fi
+
+    echo -e "${GREEN}Abort complete${NC}"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Execute Vibe Loop
+# ---------------------------------------------------------------------------
+
+if [[ -z "$TASK" ]]; then
+    echo -e "${RED}Error: Task description required${NC}"
+    show_help
+    exit 1
+fi
+
+if [[ -z "$PROJECT_PATH" ]]; then
+    echo -e "${RED}Error: --project PATH is required${NC}"
+    show_help
+    exit 1
+fi
+
+if [[ ! -d "$PROJECT_PATH" ]]; then
+    echo -e "${RED}Error: Project path not found: $PROJECT_PATH${NC}"
+    exit 1
+fi
+
+echo -e "${BLUE}Starting vibe session...${NC}"
+echo -e "  Task: ${GREEN}$TASK${NC}"
+echo -e "  Project: ${GREEN}$PROJECT_PATH${NC}"
+echo -e "  Board: ${GREEN}$BOARD${NC}"
+echo -e "  Max Retries: ${GREEN}$MAX_RETRIES${NC}"
+
+python3 "$VIBE_LOOP" \
+    "$TASK" \
+    --project-path "$PROJECT_PATH" \
+    --board "$BOARD" \
+    --max-retries "$MAX_RETRIES" \
+    $NOTIFY
+
+exit $?
