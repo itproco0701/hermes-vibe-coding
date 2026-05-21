@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.vibe-context.json
+.vibe-mistakes.json

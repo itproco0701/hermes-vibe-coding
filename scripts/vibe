@@ -7,6 +7,8 @@
 #   vibe --task "Implement auth" --project /path --board threeic-erp
 #   vibe --status                    # Show current vibe session
 #   vibe --abort                     # Abort current session
+#   vibe --mistakes -p /path         # Show mistake journal
+#   vibe --clean-mistakes -p /path   # Reset mistake journal
 # ---------------------------------------------------------------------------
 
 set -e
@@ -40,20 +42,30 @@ ${BLUE}Vibe Coding CLI${NC}
 ${GREEN}Usage:${NC}
   vibe "task description" [options]
   vibe --status
+  vibe --mistakes -p /path
+  vibe --clean-mistakes -p /path
   vibe --abort
   vibe --help
 
 ${GREEN}Options:${NC}
-  -p, --project PATH    Project root path (required for tasks)
-  -b, --board NAME      Kanban board name (default: default)
-  -r, --retries N       Max fix attempts (default: 3)
-  --no-notify           Disable Telegram notifications
-  --status              Show current vibe session status
-  --abort               Abort current vibe session
+  -p, --project PATH       Project root path (required for tasks)
+  -b, --board NAME         Kanban board name (default: default)
+  -r, --retries N          Max fix attempts (default: 3)
+  --no-notify              Disable Telegram notifications
+  --status                 Show current vibe session status
+  --mistakes               Show mistake journal for project
+  --clean-mistakes         Reset mistake journal for project
+  --abort                  Abort current vibe session
+
+${GREEN}Mistake Journal:${NC}
+  The mistake journal permanently records thinking errors and judgment mistakes.
+  It is checked before every Dev/QA step to prevent repeating past errors.
 
 ${GREEN}Examples:${NC}
   vibe "Implement user auth endpoint" -p /home/workspace/new-erp
   vibe "Fix dashboard stats API" -p /home/workspace/new-erp -b threeic-erp -r 5
+  vibe --mistakes -p /home/workspace/new-erp
+  vibe --clean-mistakes -p /home/workspace/new-erp
   vibe --status
 EOF
 }
@@ -70,6 +82,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --abort|-a)
             MODE="abort"
+            shift
+            ;;
+        --mistakes|-m)
+            MODE="mistakes"
+            shift
+            ;;
+        --clean-mistakes)
+            MODE="clean-mistakes"
             shift
             ;;
         --project|-p)
@@ -122,6 +142,14 @@ if [[ "$MODE" == "status" ]]; then
         echo -e "${GREEN}Last Result:${NC} $last_result"
     done
 
+    # Show mistake journal summary
+    for mj in $(find /home/workspace -name ".vibe-mistakes.json" 2>/dev/null); do
+        project=$(dirname "$mj" | sed 's|/home/workspace/||')
+        count=$(python3 -c "import json; j=json.load(open('$mj')); print(len(j.get('mistakes',[])))" 2>/dev/null || echo "?")
+        repeated=$(python3 -c "import json; j=json.load(open('$mj')); print(sum(1 for m in j.get('mistakes',[]) if m.get('occurrence_count',1)>1))" 2>/dev/null || echo "?")
+        echo -e "\n${YELLOW}Mistake Journal:${NC} $project — $count mistake(s), $repeated repeated"
+    done
+
     # Check kanban for in_progress vibe tasks
     echo ""
     if command -v sqlite3 &> /dev/null; then
@@ -131,6 +159,32 @@ if [[ "$MODE" == "status" ]]; then
     fi
 
     exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Mistakes Mode
+# ---------------------------------------------------------------------------
+
+if [[ "$MODE" == "mistakes" ]]; then
+    if [[ -z "$PROJECT_PATH" ]]; then
+        echo -e "${RED}Error: --project PATH is required for --mistakes${NC}"
+        exit 1
+    fi
+    python3 "$VIBE_LOOP" --show-mistakes --project-path "$PROJECT_PATH"
+    exit $?
+fi
+
+# ---------------------------------------------------------------------------
+# Clean Mistakes Mode
+# ---------------------------------------------------------------------------
+
+if [[ "$MODE" == "clean-mistakes" ]]; then
+    if [[ -z "$PROJECT_PATH" ]]; then
+        echo -e "${RED}Error: --project PATH is required for --clean-mistakes${NC}"
+        exit 1
+    fi
+    python3 "$VIBE_LOOP" --clean-mistakes --project-path "$PROJECT_PATH"
+    exit $?
 fi
 
 # ---------------------------------------------------------------------------
@@ -183,6 +237,7 @@ echo -e "  Task: ${GREEN}$TASK${NC}"
 echo -e "  Project: ${GREEN}$PROJECT_PATH${NC}"
 echo -e "  Board: ${GREEN}$BOARD${NC}"
 echo -e "  Max Retries: ${GREEN}$MAX_RETRIES${NC}"
+echo -e "  Mistake Journal: ${GREEN}Active${NC}"
 
 python3 "$VIBE_LOOP" \
     "$TASK" \
