@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-vibe_loop.py — Hermes Vibe Coding Agent Loop v2
+vibe_loop.py — Hermes Vibe Coding Agent Loop v2.2
 Integrates: repo-explorer, lsp-integration, atomic-modify,
             error-recovery, git-integration, project-memory
+            + Intent Detection (auto-skill loading)
+            + Mistake Journal (permanent error memory)
 """
 
 import os
@@ -10,6 +12,8 @@ import sys
 import json
 import subprocess
 import argparse
+import hashlib
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +24,148 @@ MAX_CYCLES   = int(os.getenv("VIBE_MAX_CYCLES", "3"))
 HERMES_BIN   = os.getenv("HERMES_BIN", "hermes")
 MEMORY_DIR   = Path.home() / ".hermes" / "project-memory"
 PLANS_DIR    = Path(".hermes") / "vibe-plans"
+MISTAKES_FILE = ".vibe-mistakes.json"
+
+# ─────────────────────────────────────────────
+# Intent Detection — Auto-Skill Loading
+# ─────────────────────────────────────────────
+KEYWORD_SKILL_MAP = {
+    frozenset(["erp","oc","ar","ap","gl","庫存","stock","訂單","order","採購","purchase","出貨","shipment"]):
+        ["frontend-ui-engineering", "test-driven-development"],
+    frozenset(["td","tdd","測試","test","pytest","jest"]):
+        ["test-driven-development"],
+    frozenset(["review","審查","程式碼品質","code quality","lint"]):
+        ["requesting-code-review"],
+    frozenset(["重構","refactor","rename","搬移","move module"]):
+        ["atomic-modify", "lsp-integration"],
+    frozenset(["部署","deploy","release","上線","production"]):
+        ["git-integration", "project-memory"],
+    frozenset(["debug","修復","fix","修bug","error","500","422","404"]):
+        ["error-recovery", "lsp-integration"],
+    frozenset(["效能","performance","優化","optimize","slow","n+1"]):
+        ["lsp-integration", "project-memory"],
+    frozenset(["安全","security","auth","jwt","rbac","權限"]):
+        ["requesting-code-review", "error-recovery"],
+    frozenset(["api","endpoint","路由","route","crud"]):
+        ["atomic-modify", "test-driven-development"],
+    frozenset(["前端","frontend","ui","頁面","component"]):
+        ["frontend-ui-engineering", "lsp-integration"],
+    frozenset(["後端","backend","server","fastapi","database"]):
+        ["atomic-modify", "project-memory"],
+    frozenset(["數據庫","db","postgresql","migration","schema"]):
+        ["atomic-modify", "project-memory", "lsp-integration"],
+    frozenset(["報表","report","dashboard","analytics","分析"]):
+        ["frontend-ui-engineering", "test-driven-development"],
+    frozenset(["新功能","new feature","新增","implement"]):
+        ["repo-explorer", "atomic-modify", "test-driven-development"],
+    frozenset(["整合","integration","第三方","third-party","webhook"]):
+        ["error-recovery", "test-driven-development"],
+    frozenset(["文件","documentation","readme","api doc"]):
+        ["project-memory"],
+    frozenset(["記憶","memory","歷史","之前的","上次"]):
+        ["project-memory"],
+    frozenset(["rollback","undo","復原","回滾"]):
+        ["git-integration"],
+}
+
+def detect_skills(intent: str) -> list[str]:
+    """Scan intent for keywords and return matching skill names."""
+    intent_lower = intent.lower()
+    matched = set()
+    for keywords, skills in KEYWORD_SKILL_MAP.items():
+        if any(kw in intent_lower for kw in keywords):
+            matched.update(skills)
+    return sorted(matched)
+
+# ─────────────────────────────────────────────
+# Mistake Journal
+# ─────────────────────────────────────────────
+def load_mistake_journal(project_path: str) -> dict:
+    mf = Path(project_path) / MISTAKES_FILE
+    if mf.exists():
+        with open(mf) as f:
+            return json.load(f)
+    return {"project": Path(project_path).name, "created_at": datetime.now().isoformat(), "mistakes": []}
+
+def save_mistake_journal(project_path: str, journal: dict):
+    mf = Path(project_path) / MISTAKES_FILE
+    with open(mf, "w") as f:
+        json.dump(journal, f, indent=2, ensure_ascii=False)
+
+def check_mistakes_before_action(project_path: str, context: str, categories: list[str] = None) -> list[str]:
+    journal = load_mistake_journal(project_path)
+    warnings = []
+    for m in journal.get("mistakes", []):
+        if categories and m.get("category") not in categories:
+            continue
+        relevance = 0
+        context_lower = context.lower()
+        for f in m.get("related_files", []):
+            if f.lower() in context_lower:
+                relevance += 2
+        for kw in m.get("context", "").split():
+            if kw.lower() in context_lower:
+                relevance += 1
+        if relevance > 0 or (categories and m.get("category") in categories):
+            count = m.get("occurrence_count", 1)
+            urgency = "🔴" if count >= 3 else "🟡" if count >= 2 else "⚠️"
+            warnings.append(
+                f"{urgency} [{m['category']} x{count}] {m['mistake']} — Lesson: {m.get('lesson', 'N/A')}"
+            )
+    return sorted(warnings, key=lambda w: "🔴" in w, reverse=True)
+
+def analyze_failure_for_mistake(error_output: str, context: str, project_path: str, related_files: list[str] = None):
+    journal = load_mistake_journal(project_path)
+    category = "unknown"
+    if re.search(r"SyntaxError|IndentationError", error_output):
+        category = "confusion"
+    elif re.search(r"TypeError|AttributeError|has no attribute", error_output):
+        category = "misjudgment"
+    elif re.search(r"ImportError|ModuleNotFoundError|Cannot find module", error_output):
+        category = "missing_import"
+    elif re.search(r"422|Unprocessable|validation error|field required", error_output, re.IGNORECASE):
+        category = "schema_mismatch"
+    elif re.search(r"sup_id|supp_id|total_amount|total\b", error_output):
+        category = "wrong_assumption"
+    elif re.search(r"unrelated|unexpected|side.effect", error_output, re.IGNORECASE):
+        category = "scope_creep"
+
+    lesson = ""
+    if category == "schema_mismatch":
+        lesson = "Always verify request/response schemas match the model definition"
+    elif category == "wrong_assumption":
+        lesson = "Always check field names in the actual model before using them"
+    elif category == "missing_import":
+        lesson = "Check all imports after adding new model/function references"
+    elif category == "scope_creep":
+        lesson = "Only modify files directly related to the task"
+
+    # Check if same mistake already exists
+    existing = None
+    for m in journal["mistakes"]:
+        if m["category"] == category and m.get("context","")[:50] == context[:50]:
+            existing = m
+            break
+
+    if existing:
+        existing["occurrence_count"] = existing.get("occurrence_count", 1) + 1
+        existing["last_occurred"] = datetime.now().isoformat()
+        existing["related_files"] = list(set(existing.get("related_files", []) + (related_files or [])))
+    else:
+        journal["mistakes"].append({
+            "id": hashlib.md5(f"{category}:{context}:{datetime.now()}".encode()).hexdigest()[:12],
+            "category": category,
+            "context": context[:200],
+            "mistake": error_output[:300],
+            "lesson": lesson,
+            "related_files": related_files or [],
+            "timestamp": datetime.now().isoformat(),
+            "session_id": datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "occurrence_count": 1,
+            "last_occurred": datetime.now().isoformat(),
+        })
+    save_mistake_journal(project_path, journal)
+    return category
 
 # ─────────────────────────────────────────────
 # Helpers
@@ -473,6 +619,27 @@ def main():
 
     print(f"\n🌀 Vibe Coding: {args.intent}")
     print(f"   Project: {root}")
+
+    # Intent Detection — Auto-Skill Loading
+    detected_skills = detect_skills(args.intent)
+    if detected_skills:
+        section("Intent Detection — Auto-Skill Loading")
+        print(f"  Detected skills: {', '.join(detected_skills)}")
+        for skill_name in detected_skills:
+            print(f"  → Loading: {skill_name}")
+            # Try to load skill via Hermes skill_view
+            run(f"{HERMES_BIN} skill_view {skill_name} 2>/dev/null", capture=True)
+        print(f"  {len(detected_skills)} skill(s) loaded. They will be used alongside vibe-coding.\n")
+    else:
+        print("  No specific skills matched — proceeding with vibe-coding alone.\n")
+
+    # Check Mistake Journal before starting
+    mistake_warnings = check_mistakes_before_action(root, args.intent)
+    if mistake_warnings:
+        section("⚠️ Mistake Journal Warnings")
+        for w in mistake_warnings:
+            print(f"  {w}")
+        print()
 
     # Phase 0: Git
     git_ctx = phase_git_checkpoint(args.intent, args.no_branch)

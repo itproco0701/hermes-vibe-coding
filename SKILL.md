@@ -1,13 +1,13 @@
 ---
 name: vibe-coding
-description: Vibe Coding meta-skill for Hermes — implements the Dev↔QA↔Fix agentic loop with permanent Mistake Journal to prevent repeated errors. Achieves Claude Code/Codex-like vibe coding experience.
+description: Vibe Coding meta-skill for Hermes — implements the Dev↔QA↔Fix agentic loop with permanent Mistake Journal and Intent Detection auto-skill loading. Achieves Claude Code/Codex-like vibe coding experience.
 risk: medium
 source: custom
 date_added: '2026-05-15'
 compatibility: Hermes Agent >= 1.0 (any platform)
 metadata:
   author: aipplaw.zo.computer
-  version: 2.0.0
+  version: 2.2.0
   homepage: https://github.com/itproco0701/hermes-vibe-coding
 allowed-tools: Bash, Read, Edit, Glob, Grep, WebSearch, WebRead
 
@@ -38,6 +38,12 @@ portable:
     - references/context-loading.md
     - references/quickstart.md
     - .vibe-context.example.json
+    - skills/atomic-modify.skill.md
+    - skills/error-recovery.skill.md
+    - skills/git-integration.skill.md
+    - skills/lsp-integration.skill.md
+    - skills/project-memory.skill.md
+    - skills/repo-explorer.skill.md
   install_command: |
     mkdir -p ~/.hermes/skills && cp -r vibe-coding ~/.hermes/skills/ && bash ~/.hermes/skills/vibe-coding/install.sh
   remote_install: |
@@ -48,7 +54,98 @@ portable:
 
 ## What This Skill Does
 
-Wraps Hermes's native capabilities into a **Dev↔QA↔Fix loop** with a **permanent Mistake Journal** that records every thinking confusion or judgment error, and checks them before each step to prevent repeating mistakes.
+Wraps Hermes's native capabilities into a **Dev↔QA↔Fix loop** with:
+1. **Permanent Mistake Journal** — records every thinking confusion or judgment error, checks before each step
+2. **Intent Detection** — auto-loads relevant skills based on request keywords
+3. **6 Sub-Skills** — repo-explorer, lsp-integration, atomic-modify, error-recovery, git-integration, project-memory
+
+## Intent Detection — Auto-Skill Loading
+
+**When the user says "vibe 幫我XXX" or "/vibe XXX", analyze the request and automatically load the skills that match.** Read the full request before deciding which skills to load — do NOT ask the user, just load them.
+
+### Skill Mapping Table
+
+| Keywords in request | Skills to load |
+|---------------------|----------------|
+| `ERP` / `OC` / `AR` / `AP` / `GL` / `庫存` / `stock` / `訂單` / `order` / `採購` / `purchase` / `出貨` / `shipment` | `frontend-ui-engineering`, `test-driven-development` |
+| `TD` / `TDD` / `測試` / `test` / `pytest` / `jest` | `test-driven-development` |
+| `review` / `審查` / `程式碼品質` / `code quality` / `lint` | `requesting-code-review` |
+| `重構` / `refactor` / `rename` / `搬移` / `move module` | `atomic-modify`, `lsp-integration` |
+| `部署` / `deploy` / `release` / `上線` / `production` | `git-integration`, `project-memory` |
+| `debug` / `修復` / `fix` / `修bug` / `error` / `500` / `422` / `404` | `error-recovery`, `lsp-integration` |
+| `效能` / `performance` / `優化` / `optimize` / `slow` / `N+1` | `lsp-integration`, `project-memory` |
+| `安全` / `security` / `auth` / `JWT` / `RBAC` / `權限` | `requesting-code-review`, `error-recovery` |
+| `API` / `endpoint` / `路由` / `route` / `CRUD` | `atomic-modify`, `test-driven-development` |
+| `前端` / `frontend` / `UI` / `頁面` / `component` | `frontend-ui-engineering`, `lsp-integration` |
+| `後端` / `backend` / `server` / `FastAPI` / `database` | `atomic-modify`, `project-memory` |
+| `數據庫` / `DB` / `PostgreSQL` / `migration` / `schema` | `atomic-modify`, `project-memory`, `lsp-integration` |
+| `報表` / `report` / `dashboard` / `analytics` / `分析` | `frontend-ui-engineering`, `test-driven-development` |
+| `新功能` / `new feature` / `新增` / `implement` | `repo-explorer`, `atomic-modify`, `test-driven-development` |
+| `整合` / `integration` / `第三方` / `third-party` / `webhook` | `error-recovery`, `test-driven-development` |
+| `文件` / `documentation` / `README` / `API doc` | `project-memory` |
+| `記憶` / `memory` / `歷史` / `之前的` / `上次` | `project-memory` |
+| `rollback` / `undo` / `復原` / `回滾` | `git-integration` |
+
+### Procedure
+
+1. Scan the user's full request for keywords above
+2. Load each matching skill via `skill_view(name)`
+3. Follow the loaded skill's workflow IN ADDITION to this vibe-coding loop
+4. If no keywords match, proceed with vibe-coding alone
+5. If the request mixes multiple domains, load ALL matching skills
+
+### Auto-Skill Loading in vibe_loop.py
+
+The intent detection is implemented in `scripts/vibe_loop.py` via the `detect_skills()` function:
+
+```python
+def detect_skills(intent: str) -> list[str]:
+    """Scan intent for keywords and return matching skill names."""
+    KEYWORD_SKILL_MAP = {
+        frozenset(["erp","oc","ar","ap","gl","庫存","stock","訂單","order","採購","purchase","出貨","shipment"]):
+            ["frontend-ui-engineering", "test-driven-development"],
+        frozenset(["td","tdd","測試","test","pytest","jest"]):
+            ["test-driven-development"],
+        frozenset(["review","審查","程式碼品質","code quality","lint"]):
+            ["requesting-code-review"],
+        frozenset(["重構","refactor","rename","搬移","move module"]):
+            ["atomic-modify", "lsp-integration"],
+        frozenset(["部署","deploy","release","上線","production"]):
+            ["git-integration", "project-memory"],
+        frozenset(["debug","修復","fix","修bug","error","500","422","404"]):
+            ["error-recovery", "lsp-integration"],
+        frozenset(["效能","performance","優化","optimize","slow","n+1"]):
+            ["lsp-integration", "project-memory"],
+        frozenset(["安全","security","auth","jwt","rbac","權限"]):
+            ["requesting-code-review", "error-recovery"],
+        frozenset(["api","endpoint","路由","route","crud"]):
+            ["atomic-modify", "test-driven-development"],
+        frozenset(["前端","frontend","ui","頁面","component"]):
+            ["frontend-ui-engineering", "lsp-integration"],
+        frozenset(["後端","backend","server","fastapi","database"]):
+            ["atomic-modify", "project-memory"],
+        frozenset(["數據庫","db","postgresql","migration","schema"]):
+            ["atomic-modify", "project-memory", "lsp-integration"],
+        frozenset(["報表","report","dashboard","analytics","分析"]):
+            ["frontend-ui-engineering", "test-driven-development"],
+        frozenset(["新功能","new feature","新增","implement"]):
+            ["repo-explorer", "atomic-modify", "test-driven-development"],
+        frozenset(["整合","integration","第三方","third-party","webhook"]):
+            ["error-recovery", "test-driven-development"],
+        frozenset(["文件","documentation","readme","api doc"]):
+            ["project-memory"],
+        frozenset(["記憶","memory","歷史","之前的","上次"]):
+            ["project-memory"],
+        frozenset(["rollback","undo","復原","回滾"]):
+            ["git-integration"],
+    }
+    intent_lower = intent.lower()
+    matched = set()
+    for keywords, skills in KEYWORD_SKILL_MAP.items():
+        if any(kw in intent_lower for kw in keywords):
+            matched.update(skills)
+    return sorted(matched)
+```
 
 ## Core Loop with Mistake Memory
 
