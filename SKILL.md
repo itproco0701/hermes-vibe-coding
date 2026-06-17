@@ -7,7 +7,7 @@ date_added: '2026-05-15'
 compatibility: Hermes Agent >= 1.0 (any platform)
 metadata:
   author: aipplaw.zo.computer
-  version: 2.2.0
+  version: 2.3.0
   homepage: https://github.com/itproco0701/hermes-vibe-coding
 allowed-tools: Bash, Read, Edit, Glob, Grep, WebSearch, WebRead
 
@@ -252,6 +252,16 @@ python3 scripts/vibe_loop.py --show-mistakes --project-path /path
 python3 scripts/vibe_loop.py --clean-mistakes --project-path /path
 ```
 
+## StraTA Integration (v2.3)
+
+When the intent contains plan-shaped keywords (`plan`, `refactor`, `architect`, `重構`, `選方案`, etc.) or fix-shaped keywords (`fix`, `debug`, `500`, `404`), `detect_skills()` automatically loads `hermes-strata`. The loop is wired so:
+
+1. **`phase_plan`** calls `strata-plan sample` instead of one-shot plan generation
+2. User picks the best of 3 candidate plans (`minimal` / `structured` / `rewrite`) — replaces the manual "Proceed with this plan? [Y/n/edit]" prompt with an explicit strategy choice
+3. **`phase_correct`** runs `strata-plan judge` after every fix attempt; if `score < 0.6`, the missed steps are appended to `.vibe-mistakes.json` as a `plan_mismatch` lesson for next time
+
+`strata-plan` is bundled under `skills/hermes-strata/` and symlinked to `/usr/local/bin/strata-plan` by `install.sh` step 7.
+
 ## Files
 
 ```
@@ -262,7 +272,15 @@ vibe-coding/
 ├── .vibe-context.example.json  ← Reference context
 ├── scripts/
 │   ├── vibe                    ← CLI wrapper (supports --mistakes)
-│   └── vibe_loop.py            ← Core loop engine with Mistake Journal
+│   └── vibe_loop.py            ← Core loop engine with Mistake Journal + StraTA bridge
+├── skills/
+│   ├── hermes-strata/          ← StraTA-style plan sampling + self-judgment
+│   │   ├── SKILL.md
+│   │   ├── scripts/strata-plan ← CLI: sample / pick / judge / bundle / status
+│   │   ├── references/
+│   │   └── assets/
+│   ├── lsp-integration.skill.md
+│   └── ...
 └── references/
     ├── hermes-integration.md   ← Deep integration docs
     ├── context-loading.md       ← Context strategy

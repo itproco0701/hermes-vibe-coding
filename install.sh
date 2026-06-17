@@ -194,6 +194,7 @@ link_or_path() {
 
 link_or_path "$SKILL_DIR/scripts/vibe"         "/usr/local/bin/vibe"         "vibe"
 link_or_path "$SKILL_DIR/scripts/vibe_loop.py" "/usr/local/bin/vibe_loop.py" "vibe_loop.py"
+link_or_path "$SKILL_DIR/skills/hermes-strata/scripts/strata-plan" "/usr/local/bin/strata-plan" "strata-plan"
 
 # ─────────────────────────────────────────────
 # Step 8: Create memory directory
@@ -219,6 +220,8 @@ REQUIRED_FILES=(
     "skills/repo-explorer.skill.md"
     "skills/git-integration.skill.md"
     "skills/project-memory.skill.md"
+    "skills/hermes-strata/SKILL.md"
+    "skills/hermes-strata/scripts/strata-plan"
 )
 
 ALL_OK=true

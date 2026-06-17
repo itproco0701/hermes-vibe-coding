@@ -14,6 +14,7 @@ import subprocess
 import argparse
 import hashlib
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,12 @@ HERMES_BIN   = os.getenv("HERMES_BIN", "hermes")
 MEMORY_DIR   = Path.home() / ".hermes" / "project-memory"
 PLANS_DIR    = Path(".hermes") / "vibe-plans"
 MISTAKES_FILE = ".vibe-mistakes.json"
+STRATA_PLAN_BIN = os.getenv("STRATA_PLAN_BIN", "strata-plan")
+STRATA_PLAN_TRIGGER_KEYWORDS = frozenset([
+    "plan", "architect", "設計", "架構", "approach", "refactor", "rewrite",
+    "重構", "重寫", "compare", "選方案", "哪個好", "option",
+    "fix", "debug", "修復", "修bug", "error", "500", "422", "404",
+])
 
 # ─────────────────────────────────────────────
 # Intent Detection — Auto-Skill Loading
@@ -67,6 +74,14 @@ KEYWORD_SKILL_MAP = {
     frozenset(["rollback","undo","復原","回滾"]):
         ["git-integration"],
 }
+
+KEYWORD_SKILL_MAP.update({
+    frozenset(["plan","architect","設計","架構","approach","refactor","rewrite","重構","重寫","compare","選方案","哪個好","option"]):
+        ["hermes-strata", "atomic-modify"],
+    frozenset(["fix","debug","修復","修bug","error","500","422","404"]):
+        ["hermes-strata", "error-recovery", "lsp-integration"],
+})
+
 
 def detect_skills(intent: str) -> list[str]:
     """Scan intent for keywords and return matching skill names."""
@@ -293,6 +308,134 @@ def phase_repo_map(root: str) -> dict:
     run(f"hermes memory save --key 'repo_map:{project_id}' --file {mem_file} --tags 'repo-map,{project_id}' 2>/dev/null")
     print(f"✅ Repo map built. Stack: {lang}/{stack.get('framework','?')}")
     return repo_map
+
+
+# ─────────────────────────────────────────────
+# StraTA integration (hermes-strata skill)
+# ─────────────────────────────────────────────
+def _has_strata() -> bool:
+    return shutil.which(STRATA_PLAN_BIN) is not None
+
+def _strata_should_trigger(intent: str) -> bool:
+    intent_lower = intent.lower()
+    return any(kw in intent_lower for kw in STRATA_PLAN_TRIGGER_KEYWORDS)
+
+def try_strata_plan(intent: str, project_path: str, n: int = 3) -> str | None:
+    """Run `strata-plan sample` then `strata-plan pick`. Returns chosen plan path or None."""
+    if not (_has_strata() and _strata_should_trigger(intent)):
+        return None
+    print("\n🧪 StraTA mode: sampling strategy cards via strata-plan...")
+    sample_cmd = [STRATA_PLAN_BIN, "sample", intent, "-n", str(n)]
+    sample = subprocess.run(sample_cmd, capture_output=True, text=True, cwd=project_path)
+    if sample.returncode != 0:
+        print(f"  ⚠️ strata-plan sample failed: {sample.stderr.strip()[:200]}")
+        return None
+    pick = subprocess.run([STRATA_PLAN_BIN, "pick"], capture_output=True, text=True, cwd=project_path)
+    if pick.returncode != 0:
+        print(f"  ⚠️ strata-plan pick failed: {pick.stderr.strip()[:200]}")
+        return None
+    chosen = _extract_chosen_plan_path(pick.stdout)
+    if not chosen or not Path(chosen).exists():
+        print("  ⚠️ strata-plan pick returned no usable plan path")
+        return None
+    plan_md = Path(chosen).read_text()
+    PLANS_DIR.mkdir(parents=True, exist_ok=True)
+    saved = PLANS_DIR / f"{datetime.now():%Y%m%d-%H%M%S}-strata.md"
+    saved.write_text(plan_md)
+    print(f"  ✅ StraTA winner written to: {saved}")
+    return str(saved)
+
+def _extract_chosen_plan_path(pick_stdout: str) -> str | None:
+    lines = pick_stdout.splitlines()
+    plan_file = None
+    for i, line in enumerate(lines):
+        if "Strategy:" in line or "Plan file:" in line:
+            for nxt in lines[i + 1: i + 8]:
+                nxt = nxt.strip()
+                if nxt.startswith("/") and nxt.endswith(".md"):
+                    plan_file = nxt
+                    break
+            if plan_file:
+                break
+    if plan_file:
+        return plan_file
+    for line in lines:
+        line = line.strip()
+        if line.startswith("/") and line.endswith(".md"):
+            return line
+    return None
+
+def run_self_judgment(plan_path: str, outcome: str, project_path: str) -> dict | None:
+    """Call strata-plan judge; if missed_steps > 0, record to Mistake Journal."""
+    if not _has_strata():
+        return None
+    outcome_path = Path(project_path) / ".hermes" / "vibe-judgment-outcome.txt"
+    outcome_path.parent.mkdir(parents=True, exist_ok=True)
+    outcome_path.write_text(outcome)
+    proc = subprocess.run(
+        [STRATA_PLAN_BIN, "judge", "--plan", plan_path, "--outcome", str(outcome_path)],
+        capture_output=True, text=True, cwd=project_path,
+    )
+    try:
+        outcome_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+    if proc.returncode != 0:
+        print(f"  ⚠️ strata-plan judge failed: {proc.stderr.strip()[:200]}")
+        return None
+    judgment = None
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("{") and "missed_steps" in line:
+            try:
+                judgment = json.loads(line)
+                break
+            except json.JSONDecodeError:
+                continue
+    if judgment is None:
+        try:
+            judgment = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            print("  ⚠️ could not parse strata-plan judge output")
+            return None
+    print(f"  📊 Self-judgment: score={judgment.get('score')} missed={len(judgment.get('missed_steps', []))}")
+    if judgment.get("missed_steps"):
+        record_plan_mistake(judgment, plan_path, project_path)
+    return judgment
+
+def record_plan_mistake(judgment: dict, plan_path: str, project_path: str):
+    """Append a plan-outcome-mismatch entry to the project's Mistake Journal."""
+    missed = judgment.get("missed_steps", [])
+    journal = load_mistake_journal(project_path)
+    mistake_text = "Plan missed " + str(len(missed)) + " step(s): " + " | ".join(missed)[:280]
+    lesson = "Re-run strata-plan sample + pick; or run hermes-strata plan refinement before execute."
+    context = f"plan: {Path(plan_path).name}"
+    existing = None
+    for m in journal["mistakes"]:
+        if m["category"] == "plan_outcome_mismatch" and m.get("context", "")[:40] == context[:40]:
+            existing = m
+            break
+    if existing:
+        existing["occurrence_count"] = existing.get("occurrence_count", 1) + 1
+        existing["last_occurred"] = datetime.now().isoformat()
+        existing["missed_steps"] = missed
+    else:
+        journal["mistakes"].append({
+            "id": hashlib.md5(f"plan_outcome_mismatch:{plan_path}:{datetime.now()}".encode()).hexdigest()[:12],
+            "category": "plan_outcome_mismatch",
+            "context": context,
+            "mistake": mistake_text,
+            "lesson": lesson,
+            "related_files": [plan_path],
+            "timestamp": datetime.now().isoformat(),
+            "session_id": datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "occurrence_count": 1,
+            "last_occurred": datetime.now().isoformat(),
+            "missed_steps": missed,
+            "score": judgment.get("score"),
+        })
+    save_mistake_journal(project_path, journal)
+    print(f"  ⚠️ Recorded plan_outcome_mismatch in {MISTAKES_FILE}")
 
 
 # ─────────────────────────────────────────────
@@ -532,6 +675,8 @@ After fixing, describe in one sentence what you changed and why.""",
         context=f"Fix agent — cycle {cycle}. Minimal changes only.",
         toolsets="terminal,file"
     )
+    if _strata_record_failure_to_journal(root, error_output, plan_file):
+        print("📓 Recorded strata plan↔outcome gap to Mistake Journal.")
     return True
 
 
