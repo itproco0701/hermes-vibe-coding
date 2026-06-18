@@ -7,7 +7,7 @@ date_added: '2026-06-17'
 compatibility: Hermes Agent >= 1.0; standalone Python 3.10+; pairs with vibe-coding v2.x
 metadata:
   author: aipplaw.zo.computer
-  version: 0.1.0
+  version: 2.5.0
   derived_from: xxyQwQ/StraTA (arXiv 2605.06642)
 allowed-tools: Bash, Read, Edit, Glob, Grep
 
