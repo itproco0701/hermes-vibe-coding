@@ -14,23 +14,24 @@ planning sub-skill that samples multiple strategies before committing to one.
 
 | Version | What changed |
 |---------|--------------|
+| **v2.5.0** | `hermes-strata` generalization — CJK intent detection (繁中 / 簡中 / 日本語 / 한국어), project-level config (`.hermes/strata-config.json` or `.vibe-config.json`), non-interactive `--auto-select {first,best,random}`, template system (`db-migration`, `api-design`, `test-fix`, `perf`, `docs`, `component-first`, `test-first`), category-aware threshold with `threshold_overrides`, confidence-aware auto-select (`auto_select_min_n` gate), `recalibrate` from historical judgments |
 | **v2.4.0** | `hermes-strata` hardened — robust step extraction (numbered / lettered / bullet lists), intent-category threshold, judge→Mistake Journal auto-bridge, end-to-end smoke test in `install.sh`, `report` + `templates` + `rollback` subcommands |
 | **v2.3.0** | `hermes-strata` sub-skill — StraTA-inspired plan sampling + self-judgment. Auto-loaded when intent contains planning / fix keywords. Wired into `phase_plan()` and `phase_correct()` |
 | **v2.2.0** | Mistake Journal with permanent memory + Intent Detection auto-skill loading + 6 sub-skills |
 | **v2.0.0** | 7-phase agent loop with LSP, atomic edits, error classifier, git integration |
 
-### Dimension coverage (v2.4)
+### Dimension coverage (v2.5)
 
-| Dimension | v1 | v2 | v2.4 |
-|-----------|----|----|------|
-| Repo understanding | Manual `-p` path only | Auto root detection + symbol map + 30min cache | unchanged |
-| Semantic analysis | Pure grep/find | LSP diagnostics (pyright, tsc, gopls, rust-analyzer) | unchanged |
-| Cross-file edits | Sequential, no tracking | AST import graph + blast radius + atomic transaction | unchanged |
-| Error self-correction | Generic retry | 10-type classifier + strategy-matched fix agent | + strata-judge feedback |
-| Feedback loop | Basic stdout capture | Test + lint + LSP + independent subagent review | unchanged |
-| Git integration | Not included | Pre-task stash/branch + step commits + PR | unchanged |
-| Cross-session memory | Via Hermes memory | Structured JSON: conventions, pitfalls, task history | + strata plan↔outcome pairs |
-| **Plan sampling** | **None** | **None** | **StraTA: N candidate plans → pick → self-judge → feed gaps to Mistake Journal** |
+| Dimension | v1 | v2 | v2.4 | v2.5 |
+|-----------|----|----|------|------|
+| Repo understanding | Manual `-p` path only | Auto root detection + symbol map + 30min cache | unchanged | unchanged |
+| Semantic analysis | Pure grep/find | LSP diagnostics (pyright, tsc, gopls, rust-analyzer) | unchanged | unchanged |
+| Cross-file edits | Sequential, no tracking | AST import graph + blast radius + atomic transaction | unchanged | unchanged |
+| Error self-correction | Generic retry | 10-type classifier + strategy-matched fix agent | + strata-judge feedback | + per-category threshold |
+| Feedback loop | Basic stdout capture | Test + lint + LSP + independent subagent review | unchanged | unchanged |
+| Git integration | Not included | Pre-task stash/branch + step commits + PR | unchanged | unchanged |
+| Cross-session memory | Via Hermes memory | Structured JSON: conventions, pitfalls, task history | + strata plan↔outcome pairs | + project-level config |
+| **Plan sampling** | **None** | **None** | **StraTA: N candidate plans → pick → self-judge → feed gaps to Mistake Journal** | **+ CJK, non-interactive, templates, recalibrate** |
 
 ---
 
@@ -90,6 +91,38 @@ A lightweight, inference-time application of the [StraTA paper](https://arxiv.or
 
 The CPU `rollout-sim` mode is a sanity check only — real value comes from running the
 sampling + judgment loop in your actual workflow.
+
+#### v2.5.0 — generalization (7 features)
+
+Closes the gaps that showed up when teams with different languages / workflows tried v2.4.0.
+All features are **additive + opt-in** — existing v2.4.0 calls and `judgments.jsonl` files still work.
+
+| # | Feature | Solves |
+|---|---------|--------|
+| 1 | **CJK intent detection** (繁中 / 簡中 / 日本語 / 한국어) | "修 bug 找不到對應 category" |
+| 2 | **Project-level config** (`.hermes/strata-config.json` or `.vibe-config.json`) | Hard-coded thresholds in central config |
+| 3 | **Non-interactive `--auto-select` modes** (`first` / `best` / `random`) | Interactive prompt blocks CI / Telegram |
+| 4 | **Template system** (`db-migration`, `api-design`, `test-fix`, `perf`, `docs`, `component-first`, `test-first`) | Generic templates ignore domain best practices |
+| 5 | **Category-aware threshold + `threshold_overrides`** | Single 0.6 for `db` is wrong for `api` |
+| 6 | **Confidence-aware auto-select** (`auto_select_min_n` gate) | `best` with n=2 is just noise |
+| 7 | **`recalibrate` from historical judgments** | Manual threshold tuning |
+
+Quick example:
+
+```bash
+# 1. Init project config
+strata-plan init
+
+# 2. Sample with template + non-interactive pick
+strata-plan sample "add OAuth to login flow" -t api-design -n 4
+strata-plan pick --auto-select best  # gated by auto_select_min_n
+
+# 3. Judge after execution
+strata-plan judge .strata-plans/plan-*.md <outcome>
+
+# 4. After ≥5 judgments, recalibrate thresholds from real data
+strata-plan recalibrate
+```
 
 ---
 
@@ -221,6 +254,7 @@ hermes-vibe-coding/
 
 ## Changelog
 
+- **v2.5.0** (2026-06-18): `hermes-strata` generalization — CJK intent detection (繁中 / 簡中 / 日本語 / 한국어), project-level config (`.hermes/strata-config.json` / `.vibe-config.json`), non-interactive `--auto-select {first,best,random}`, template system, category-aware threshold + `threshold_overrides`, confidence-aware auto-select gate, `recalibrate` from historical judgments. Additive + opt-in — all v2.4.0 calls still work unchanged.
 - **v2.4.0** (2026-06-18): `hermes-strata` hardening — robust step extraction, intent-category threshold, judge→Mistake Journal auto-bridge, end-to-end smoke test in `install.sh`, `report` + `templates` + `rollback` subcommands, intent-weight gating
 - **v2.3.0** (2026-06-17): Initial `hermes-strata` integration — StraTA-inspired plan sampling + self-judgment, auto-loaded by Intent Detection, wired into `phase_plan()` and `phase_correct()`
 - **v2.2.0** (2026-05-15): Mistake Journal with permanent memory + Intent Detection auto-skill loading + 6 sub-skills
