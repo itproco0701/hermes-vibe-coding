@@ -303,5 +303,12 @@ vibe-coding/
 
 ## Changelog
 
-- **v2.0.0** (2026-05-15): Added permanent Mistake Journal with auto-categorization, pre-step checking, and repeated-error tracking
+- **v2.4.0** (2026-06-18): `hermes-strata` hardening — bullet-list step extractor,
+  intent-category-aware thresholds (db/api/perf/refactor/fix/debug/migration/test/docs),
+  `report`/`rollback`/`templates` commands, judge→Mistake Journal bridge with
+  `missed_steps` entries, intent-weight keyword gating (lightweight fix/debug no
+  longer force a full plan), install.sh Step 9b regression smoke test
+- **v2.3.0** (2026-06-17): Integrated `hermes-strata` — StraTA-inspired plan
+  sampling + self-judgment sub-skill; auto-wires winner into `phase_plan` and
+  judgment outcome into `phase_correct`- **v2.0.0** (2026-05-15): Added permanent Mistake Journal with auto-categorization, pre-step checking, and repeated-error tracking
 - **v1.0.0** (2026-05-15): Initial release with Dev↔QA↔Fix loop

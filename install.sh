@@ -240,6 +240,62 @@ if [[ "$ALL_OK" == false ]]; then
 fi
 
 # ─────────────────────────────────────────────
+# Step 9b: Regression smoke test — confirm strata-plan actually works
+# ─────────────────────────────────────────────
+section "Step 9b: Regression smoke test"
+
+SMOKE_OK=true
+STRATA_BIN="$SKILL_DIR/skills/hermes-strata/scripts/strata_plan.py"
+
+if ! python3 -c "import ast; ast.parse(open(\"$STRATA_BIN\").read())" 2>/dev/null; then
+    error "strata_plan.py has a syntax error — installation broken"
+    SMOKE_OK=false
+else
+    info "strata_plan.py parses ✓"
+fi
+
+# Run a synthetic judge round-trip in a temp dir to confirm CLI works end-to-end
+SMOKE_DIR="$(mktemp -d)"
+SMOKE_PLAN="$SMOKE_DIR/plan.md"
+SMOKE_OUT="$SMOKE_DIR/outcome.txt"
+cat > "$SMOKE_PLAN" <<SMP
+# Plan: smoke test
+
+## Implementation steps
+- First step
+- Second step
+SMP
+echo "completed the First step" > "$SMOKE_OUT"
+
+if ! python3 "$STRATA_BIN" sample "smoke test" -n 2 > "$SMOKE_DIR/sample.log" 2>&1; then
+    error "strata-plan sample failed — see $SMOKE_DIR/sample.log"
+    SMOKE_OK=false
+else
+    info "strata-plan sample ✓"
+fi
+
+if ! python3 "$STRATA_BIN" judge "$SMOKE_PLAN" "$SMOKE_OUT" > "$SMOKE_DIR/judge.log" 2>&1; then
+    error "strata-plan judge failed — see $SMOKE_DIR/judge.log"
+    SMOKE_OK=false
+else
+    info "strata-plan judge ✓"
+fi
+
+if ! python3 "$STRATA_BIN" templates > "$SMOKE_DIR/templates.log" 2>&1; then
+    error "strata-plan templates failed"
+    SMOKE_OK=false
+else
+    info "strata-plan templates ✓"
+fi
+
+rm -rf "$SMOKE_DIR"
+
+if [[ "$SMOKE_OK" == false ]]; then
+    error "Regression smoke test failed — do not proceed."
+    exit 1
+fi
+
+# ─────────────────────────────────────────────
 # Step 10: Check Hermes skill discovery
 # ─────────────────────────────────────────────
 section "Step 10: Hermes skill discovery"

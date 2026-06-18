@@ -83,13 +83,58 @@ KEYWORD_SKILL_MAP.update({
 })
 
 
+# Trivial-task signals — when matched, suppress hermes-strata auto-load.
+# Distinguishes "fix the typo on line 12" from "refactor the auth module".
+TRIVIAL_FIX_SIGNALS = re.compile(
+    r"""(?ix)
+    \b(?:typo|拼字|改名|rename|single\s+line|one\s+line|一字|一行|trivial)\b
+    """,
+)
+HEAVY_TASK_SIGNALS = re.compile(
+    r"""(?ix)
+    \b(?:module|system|架構|architecture|migrate|migration|wholesale|全面|整個|
+        end\s*to\s*end|e2e|multiple\s+files|cross\s*module|auth\s+module|
+        payment\s+module|order\s+module)\b
+    """,
+)
+
+
+def _strata_intent_weight(intent: str) -> float:
+    """Score how much a task deserves the full hermes-strata plan-sampling loop.
+
+    Returns a weight in [0.0, 1.0]:
+      0.0  → trivial single-file change; do NOT load hermes-strata
+      0.5  → moderate; load only if other signals align
+      1.0  → multi-file architectural change; full strata-plan loop
+    """
+    score = 0.4  # baseline for any matching keyword
+    if TRIVIAL_FIX_SIGNALS.search(intent):
+        score -= 0.4  # suppress
+    if HEAVY_TASK_SIGNALS.search(intent):
+        score += 0.4  # boost
+    if len(intent) > 80:
+        score += 0.1
+    if len(intent.split()) > 12:
+        score += 0.1
+    return max(0.0, min(1.0, score))
+
+
 def detect_skills(intent: str) -> list[str]:
-    """Scan intent for keywords and return matching skill names."""
+    """Scan intent for keywords and return matching skill names.
+
+    hermes-strata is gated by `_strata_intent_weight` to avoid the
+    "fix a typo" → "load a 7-step plan-sampling pipeline" anti-pattern.
+    """
     intent_lower = intent.lower()
     matched = set()
     for keywords, skills in KEYWORD_SKILL_MAP.items():
         if any(kw in intent_lower for kw in keywords):
             matched.update(skills)
+    # Gate hermes-strata — drop it for trivial single-line fixes
+    weight = _strata_intent_weight(intent)
+    if weight < 0.2 and "hermes-strata" in matched:
+        matched.discard("hermes-strata")
+        print(f"  ↪ suppressed hermes-strata (intent weight={weight:.2f} — trivial fix)")
     return sorted(matched)
 
 # ─────────────────────────────────────────────
