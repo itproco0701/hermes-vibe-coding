@@ -5,21 +5,32 @@ describe what you want in natural language, and the agent handles repo mapping, 
 execution, cross-file coordination, self-correction, and git checkpointing.
 
 **v2** closes the gap with [Claude Code](https://claude.ai/code) across all 6 core dimensions,
-while leveraging Hermes's unique cross-session memory advantage.
+while leveraging Hermes's unique cross-session memory advantage. **v2.3+** adds a StraTA-inspired
+planning sub-skill that samples multiple strategies before committing to one.
 
 ---
 
-## What's new in v2
+## What's new
 
-| Dimension | v1 | v2 |
-|-----------|----|----|
-| Repo understanding | Manual `-p` path only | Auto root detection + symbol map + 30min cache |
-| Semantic analysis | Pure grep/find | LSP diagnostics (pyright, tsc, gopls, rust-analyzer) |
-| Cross-file edits | Sequential, no tracking | AST import graph + blast radius + atomic transaction |
-| Error self-correction | Generic retry | 10-type classifier + strategy-matched fix agent |
-| Feedback loop | Basic stdout capture | Test + lint + LSP + independent subagent review |
-| Git integration | Not included | Pre-task stash/branch + step commits + PR |
-| Cross-session memory | Via Hermes memory | Structured JSON: conventions, pitfalls, task history |
+| Version | What changed |
+|---------|--------------|
+| **v2.4.0** | `hermes-strata` hardened — robust step extraction (numbered / lettered / bullet lists), intent-category threshold, judge→Mistake Journal auto-bridge, end-to-end smoke test in `install.sh`, `report` + `templates` + `rollback` subcommands |
+| **v2.3.0** | `hermes-strata` sub-skill — StraTA-inspired plan sampling + self-judgment. Auto-loaded when intent contains planning / fix keywords. Wired into `phase_plan()` and `phase_correct()` |
+| **v2.2.0** | Mistake Journal with permanent memory + Intent Detection auto-skill loading + 6 sub-skills |
+| **v2.0.0** | 7-phase agent loop with LSP, atomic edits, error classifier, git integration |
+
+### Dimension coverage (v2.4)
+
+| Dimension | v1 | v2 | v2.4 |
+|-----------|----|----|------|
+| Repo understanding | Manual `-p` path only | Auto root detection + symbol map + 30min cache | unchanged |
+| Semantic analysis | Pure grep/find | LSP diagnostics (pyright, tsc, gopls, rust-analyzer) | unchanged |
+| Cross-file edits | Sequential, no tracking | AST import graph + blast radius + atomic transaction | unchanged |
+| Error self-correction | Generic retry | 10-type classifier + strategy-matched fix agent | + strata-judge feedback |
+| Feedback loop | Basic stdout capture | Test + lint + LSP + independent subagent review | unchanged |
+| Git integration | Not included | Pre-task stash/branch + step commits + PR | unchanged |
+| Cross-session memory | Via Hermes memory | Structured JSON: conventions, pitfalls, task history | + strata plan↔outcome pairs |
+| **Plan sampling** | **None** | **None** | **StraTA: N candidate plans → pick → self-judge → feed gaps to Mistake Journal** |
 
 ---
 
@@ -34,14 +45,19 @@ vibe "<intent>" -p <path>
 │                                                     │
 │  Phase 0 ── git-integration    (stash + branch)    │
 │  Phase 1 ── repo-explorer      (symbol map + cache)│
-│  Phase 2 ── Planning           (intent → subtasks) │
+│  Phase 2 ── hermes-strata ★    (N candidate plans  │
+│              │                → pick → save)        │
+│              └─ planning fallback if no strata       │
 │  Phase 3 ── atomic-modify      (cross-file edits)  │
 │  Phase 4 ── lsp-integration    (semantic verify)   │
 │  Phase 5 ── error-recovery     (bounded retry ×3)  │
+│              └─ strata-judge (plan↔outcome scoring)│
 │  Phase 6 ── git-integration    (structured commit) │
 │  Phase 7 ── project-memory     (save task history) │
 └─────────────────────────────────────────────────────┘
 ```
+
+★ = loaded by Intent Detection when intent contains planning / refactor / fix keywords.
 
 ---
 
@@ -50,12 +66,30 @@ vibe "<intent>" -p <path>
 | Skill | Purpose |
 |-------|---------|
 | `SKILL.md` | Main vibe-coding skill — orchestrates the 7-phase loop |
+| `skills/hermes-strata/` | **StraTA-inspired planning**: sample N plan cards, pick one, judge plan↔outcome, auto-bridge to Mistake Journal when score < threshold |
 | `skills/lsp-integration.skill.md` | Type-aware diagnostics via pyright / tsc / gopls / rust-analyzer |
 | `skills/atomic-modify.skill.md` | Import graph + blast radius + atomic cross-file edits |
 | `skills/error-recovery.skill.md` | 10-type error classifier + strategy-matched fix agent |
 | `skills/repo-explorer.skill.md` | Auto project root detection + symbol map + caching |
 | `skills/git-integration.skill.md` | Pre-task checkpoint, step commits, rollback, PR creation |
 | `skills/project-memory.skill.md` | Cross-session conventions, pitfalls, task history |
+
+### `hermes-strata` — what it does
+
+A lightweight, inference-time application of the [StraTA paper](https://arxiv.org/abs/2605.06642) algorithm.
+**No model training required** — the pattern is implemented as a planning protocol:
+
+1. **Sample** — `strata-plan sample "<intent>"` generates N candidate plan cards, each with
+   a different strategy tag (minimal / structured / rewrite), tradeoff, and risk level.
+2. **Pick** — `strata-plan pick` lets you (or the agent) choose one interactively or non-interactively.
+3. **Execute** — the picked card is rendered into a markdown plan that `phase_execute` consumes.
+4. **Judge** — `strata-plan judge <plan> <outcome>` scores the plan↔outcome alignment using
+   robust step extraction (numbered / lettered / bullet lists).
+5. **Bridge** — if score < intent-category threshold, the missed steps are written to
+   `.vibe-mistakes.json` so future runs see the gap before they start.
+
+The CPU `rollout-sim` mode is a sanity check only — real value comes from running the
+sampling + judgment loop in your actual workflow.
 
 ---
 
@@ -68,6 +102,9 @@ git clone https://github.com/itproco0701/hermes-vibe-coding
 cd hermes-vibe-coding
 bash install.sh
 ```
+
+`install.sh` now runs an end-to-end smoke test (Step 9b) that samples a plan, runs the judge,
+and checks the bridge — so a broken install fails fast at install time, not at first use.
 
 Optional but recommended tools (installed automatically if missing):
 
@@ -99,6 +136,13 @@ vibe undo
 
 # Check current branch and loop state
 vibe status
+
+# Use hermes-strata directly (works outside vibe-coding loop)
+strata-plan sample "add OAuth to the login flow" -n 4
+strata-plan pick
+strata-plan judge .strata-plans/plan-*.md <outcome>
+strata-plan report --last 20
+strata-plan templates
 ```
 
 Inside Hermes chat:
@@ -116,12 +160,21 @@ Inside Hermes chat:
 hermes-vibe-coding/
 ├── SKILL.md                          # Main skill (agentskills.io format)
 ├── README.md
-├── install.sh                        # One-shot installer
+├── install.sh                        # One-shot installer + smoke test
 ├── .gitignore
 ├── scripts/
 │   ├── vibe                          # CLI entry point
-│   └── vibe_loop.py                  # 7-phase agent loop
+│   └── vibe_loop.py                  # 7-phase agent loop (hermes-strata wired in)
 └── skills/
+    ├── hermes-strata/                # StraTA-inspired planning sub-skill
+    │   ├── SKILL.md
+    │   ├── references/
+    │   │   ├── pattern.md            # How to apply StraTA at inference time
+    │   │   ├── integration.md        # How it slots into vibe_loop phases
+    │   │   └── prompts.md            # Drop-in prompt fragments
+    │   └── scripts/
+    │       ├── strata_plan.py        # CLI: sample / pick / judge / report / templates / rollback
+    │       └── strata_plan           # bash wrapper
     ├── lsp-integration.skill.md
     ├── atomic-modify.skill.md
     ├── error-recovery.skill.md
@@ -145,14 +198,15 @@ hermes-vibe-coding/
 
 ## How it compares to Claude Code
 
-| Feature | Claude Code | This (v2) |
-|---------|-------------|-----------|
+| Feature | Claude Code | This (v2.4) |
+|---------|-------------|-------------|
 | Repo map | Full auto | Auto (30min cache) |
 | LSP diagnostics | Native | pyright / tsc / gopls / rust-analyzer |
 | Cross-file atomicity | Native | AST graph + blast radius |
-| Self-correction | Built-in | 10-type classifier, max 3 cycles |
+| Self-correction | Built-in | 10-type classifier + strata-judge, max 3 cycles |
 | Git integration | Native | Full (stash, branch, commit, PR) |
-| Cross-session memory | CLAUDE.md only | Structured JSON + Hermes memory API |
+| Cross-session memory | CLAUDE.md only | Structured JSON + Hermes memory API + strata plan↔outcome pairs |
+| Multi-candidate planning | None | **StraTA: sample N → pick → self-judge** |
 
 ---
 
@@ -162,6 +216,16 @@ hermes-vibe-coding/
 - `git`
 - `python3 >= 3.11`
 - `ripgrep` (optional — faster repo mapping)
+
+---
+
+## Changelog
+
+- **v2.4.0** (2026-06-18): `hermes-strata` hardening — robust step extraction, intent-category threshold, judge→Mistake Journal auto-bridge, end-to-end smoke test in `install.sh`, `report` + `templates` + `rollback` subcommands, intent-weight gating
+- **v2.3.0** (2026-06-17): Initial `hermes-strata` integration — StraTA-inspired plan sampling + self-judgment, auto-loaded by Intent Detection, wired into `phase_plan()` and `phase_correct()`
+- **v2.2.0** (2026-05-15): Mistake Journal with permanent memory + Intent Detection auto-skill loading + 6 sub-skills
+- **v2.0.0** (2026-05-15): 7-phase agent loop with LSP, atomic edits, error classifier, git integration
+- **v1.0.0** (2026-05-15): Initial release with Dev↔QA↔Fix loop
 
 ---
 
